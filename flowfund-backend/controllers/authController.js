@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const { randomUUID } = require('crypto');
 
 // REGISTER
 exports.register = async (req, res) => {
@@ -54,9 +55,13 @@ exports.login = async (req, res) => {
     );
 
     const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+
+    //generate session_id (required by your DB schema)
+    const sessionId = randomUUID();
+
     await pool.query(
-      'INSERT INTO user_sessions (user_id, jwt_token, ip_address, expires_at) VALUES (?, ?, ?, ?)',
-      [user.user_id, token, req.ip, expiresAt]
+      'INSERT INTO user_sessions (session_id, user_id, jwt_token, ip_address, expires_at) VALUES (?, ?, ?, ?, ?)',
+      [sessionId, user.user_id, token, req.ip, expiresAt]
     );
 
     res.json({ message: 'Login successful', token, role: user.role_name });
