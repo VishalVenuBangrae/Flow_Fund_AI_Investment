@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { scoreFromFeatures } = require('./readinessHuggingFaceService');
 
 let _financialMetricsColumnsWidened = false;
 let _financialMetricsWidenAttempted = false;
@@ -113,25 +114,48 @@ async function calculate(user_id) {
      savings_rate.toFixed(2), volatility_score.toFixed(2), cash_buffer_months.toFixed(2)]
   );
 
-  // ── Investment readiness score (rule-based, feeds investment_scores) ──────
-  let score = 0;
-  if (monthly_income   >   0) score += 20;
-  if (savings_rate     >=  20) score += 30;
-  if (cash_buffer_months >= 3) score += 30;
-  if (volatility_score <=  100) score += 20;
-
-  const risk_level = score >= 70 ? 'HIGH' : score >= 40 ? 'MEDIUM' : 'LOW';
-
-  const recommendations = {
-    HIGH:   'Your financial profile shows strong readiness. Consider exploring low-risk index funds.',
-    MEDIUM: 'You are making progress. Focus on growing your cash buffer and reducing expense volatility.',
-    LOW:    'Build an emergency fund and reduce discretionary spending before investing.',
+  // ── Investment readiness score → Hugging Face (chat uses Gemini separately) ─
+  const featurePayload = {
+    monthly_income,
+    monthly_expenses,
+    savings_rate,
+    volatility_score,
+    cash_buffer_months,
   };
+
+  let score;
+  let risk_level;
+  let recommendation;
+
+  const ai = await scoreFromFeatures(featurePayload);
+  if (ai.ok) {
+    score = ai.score;
+    recommendation = ai.recommendation;
+    risk_level = score >= 70 ? 'HIGH' : score >= 40 ? 'MEDIUM' : 'LOW';
+    console.log(`[METRICS] readiness source=huggingface score=${score} user_id=${user_id}`);
+  } else {
+    let rb = 0;
+    if (monthly_income > 0) rb += 20;
+    if (savings_rate >= 20) rb += 30;
+    if (cash_buffer_months >= 3) rb += 30;
+    if (volatility_score <= 100) rb += 20;
+    score = rb;
+    risk_level = score >= 70 ? 'HIGH' : score >= 40 ? 'MEDIUM' : 'LOW';
+    const recommendations = {
+      HIGH:   'Your financial profile shows strong readiness. Consider exploring low-risk index funds.',
+      MEDIUM: 'You are making progress. Focus on growing your cash buffer and reducing expense volatility.',
+      LOW:    'Build an emergency fund and reduce discretionary spending before investing.',
+    };
+    recommendation = recommendations[risk_level];
+    console.log(
+      `[METRICS] readiness source=rules_fallback reason=${ai.reason} score=${score} user_id=${user_id}`
+    );
+  }
 
   await pool.query(
     `INSERT INTO investment_scores (user_id, score_value, risk_level, recommendation)
      VALUES (?, ?, ?, ?)`,
-    [user_id, score, risk_level, recommendations[risk_level]]
+    [user_id, score, risk_level, recommendation]
   );
 
   return { monthly_income, monthly_expenses, savings_rate, volatility_score, cash_buffer_months, score, risk_level };
